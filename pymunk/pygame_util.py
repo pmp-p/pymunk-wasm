@@ -1,6 +1,6 @@
 # ----------------------------------------------------------------------------
 # pymunk
-# Copyright (c) 2007-2016 Victor Blomqvist
+# Copyright (c) 2007-2012 Victor Blomqvist
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -21,217 +21,202 @@
 # SOFTWARE.
 # ----------------------------------------------------------------------------
 
-"""This submodule contains helper functions to help with quick prototyping 
+"""This submodule contains helper functions to help with quick prototyping
 using pymunk together with pygame.
 
 Intended to help with debugging and prototyping, not for actual production use
-in a full application. The methods contained in this module is opinionated 
-about your coordinate system and not in any way optimized. 
+in a full application. The methods contained in this module is opinionated
+about your coordinate system and not in any way optimized.
 """
 
+__version__ = "$Id$"
 __docformat__ = "reStructuredText"
 
-__all__ = [
-    "DrawOptions",
-    "get_mouse_pos",
-    "to_pygame",
-    "from_pygame",
-    "positive_y_is_up",
-]
-
-from typing import List, Sequence, Tuple
+__all__ = ["draw", "get_mouse_pos", "to_pygame", "from_pygame"]
 
 import pygame
 
-import pymunk
-from pymunk.space_debug_draw_options import SpaceDebugColor
-from pymunk.vec2d import Vec2d
+import pymunk4 as pymunk
+from pymunk4.vec2d import Vec2d
 
-positive_y_is_up: bool = False
-"""Make increasing values of y point upwards.
+flip_y = True
+"""Flip the y coordinate to make y point upwards"""
 
-When True::
+def draw(surface, *objs):
+    """Draw one or many pymunk objects on a pygame.Surface object.
 
-    y
-    ^
-    |      . (3, 3)
-    |
-    |   . (2, 2)
-    |
-    +------ > x
-    
-When False::
+    This method currently supports drawing of
+        * pymunk.Space
+        * pymunk.Segment
+        * pymunk.Circle
+        * pymunk.Poly
+        * pymunk.Constraint objects
 
-    +------ > x
-    |
-    |   . (2, 2)
-    |
-    |      . (3, 3)
-    v
-    y
-    
-"""
+    If a Space is passed in all shapes in that space will be drawn.
+    Unrecognized objects will be ignored (for example if you pass in a
+    constraint).
 
+    Typical usage::
 
-class DrawOptions(pymunk.SpaceDebugDrawOptions):
-    def __init__(self, surface: pygame.Surface) -> None:
-        """Draw a pymunk.Space on a pygame.Surface object.
+    >>> pymunk.pygame_util.draw(screen, my_space)
 
-        Typical usage::
+    You can control the color of a shape by setting shape.color to the color
+    you want it drawn in.
 
-        >>> import pymunk
-        >>> surface = pygame.Surface((10,10))
-        >>> space = pymunk.Space()
-        >>> options = pymunk.pygame_util.DrawOptions(surface)
-        >>> space.debug_draw(options)
+    >>> my_shape.color = pygame.color.THECOLORS["pink"]
 
-        You can control the color of a shape by setting shape.color to the color
-        you want it drawn in::
+    If you do not want a shape to be drawn, set shape.ignore_draw to True.
 
-        >>> c = pymunk.Circle(None, 10)
-        >>> c.color = pygame.Color("pink")
+    >>> my_shape.ignore_draw = True
 
-        See pygame_util.demo.py for a full example
+    Not all constraints are currently drawn in a very clear way, but all the
+    different shapes should look fine both as static and dynamic objects.
 
-        Since pygame uses a coordiante system where y points down (in contrast
-        to many other cases), you either have to make the physics simulation
-        with Pymunk also behave in that way, or flip everything when you draw.
+    See pygame_util.demo.py for a full example
 
-        The easiest is probably to just make the simulation behave the same
-        way as Pygame does. In that way all coordinates used are in the same
-        orientation and easy to reason about::
+    :Parameters:
+            surface : pygame.Surface
+                Surface that the objects will be drawn on
+            objs : One or many objects to draw
+                Can be either a single object or a list like container with
+                objects.
+    """
 
-        >>> space = pymunk.Space()
-        >>> space.gravity = (0, -1000)
-        >>> body = pymunk.Body()
-        >>> body.position = (0, 0) # will be positioned in the top left corner
-        >>> space.debug_draw(options)
+    for o in objs:
+        if isinstance(o, pymunk.Space):
+            _draw_space(surface, o)
+        elif isinstance(o, pymunk.Shape):
+            _draw_shape(surface, o)
+        elif isinstance(o, pymunk.Constraint):
+            _draw_constraint(surface, o)
+        elif hasattr(o, '__iter__'):
+            for oo in o:
+                draw(surface, oo)
 
-        To flip the drawing its possible to set the module property
-        :py:data:`positive_y_is_up` to True. Then the pygame drawing will flip
-        the simulation upside down before drawing::
+def _draw_space(surface, space):
 
-        >>> positive_y_is_up = True
-        >>> body = pymunk.Body()
-        >>> body.position = (0, 0)
-        >>> # Body will be position in bottom left corner
+    (width, height) = surface.get_size()
 
-        :Parameters:
-                surface : pygame.Surface
-                    Surface that the objects will be drawn on
-        """
-        self.surface = surface
-        super(DrawOptions, self).__init__()
+    for s in space.shapes:
+        if not (hasattr(s, "ignore_draw") and s.ignore_draw):
+            _draw_shape(surface, s)
 
-    def draw_circle(
-        self,
-        pos: Vec2d,
-        angle: float,
-        radius: float,
-        outline_color: SpaceDebugColor,
-        fill_color: SpaceDebugColor,
-    ) -> None:
-        p = to_pygame(pos, self.surface)
+    for c in space.constraints:
+        if not (hasattr(c, "ignore_draw") and c.ignore_draw):
+            _draw_constraint(surface, c)
 
-        pygame.draw.circle(self.surface, fill_color.as_int(), p, round(radius), 0)
+def _draw_shape(surface, shape):
 
-        circle_edge = pos + Vec2d(radius, 0).rotated(angle)
-        p2 = to_pygame(circle_edge, self.surface)
-        line_r = 2 if radius > 20 else 1
-        pygame.draw.lines(self.surface, outline_color.as_int(), False, [p, p2], line_r)
+    if isinstance(shape, pymunk.Circle):
+        _draw_circle(surface, shape)
+    elif isinstance(shape, pymunk.Segment):
+        _draw_segment(surface, shape)
+    elif  isinstance(shape, pymunk.Poly):
+        _draw_poly(surface, shape)
 
-    def draw_segment(self, a: Vec2d, b: Vec2d, color: SpaceDebugColor) -> None:
-        p1 = to_pygame(a, self.surface)
-        p2 = to_pygame(b, self.surface)
+def _draw_circle(surface, circle):
 
-        pygame.draw.aalines(self.surface, color.as_int(), False, [p1, p2])
+    circle_center = circle.body.position + circle.offset.rotated(circle.body.angle)
+    p = to_pygame(circle_center, surface)
 
-    def draw_fat_segment(
-        self,
-        a: Tuple[float, float],
-        b: Tuple[float, float],
-        radius: float,
-        outline_color: SpaceDebugColor,
-        fill_color: SpaceDebugColor,
-    ) -> None:
-        p1 = to_pygame(a, self.surface)
-        p2 = to_pygame(b, self.surface)
+    r = 0
+    color = pygame.color.THECOLORS["red"]
+    if circle.body.is_static:
+        color = pygame.color.THECOLORS["lightgrey"]
+        r = 1
+    if hasattr(circle, "color"):
+        color = circle.color
 
-        r = round(max(1, radius * 2))
-        pygame.draw.lines(self.surface, fill_color.as_int(), False, [p1, p2], r)
-        if r > 2:
-            orthog = [abs(p2[1] - p1[1]), abs(p2[0] - p1[0])]
-            if orthog[0] == 0 and orthog[1] == 0:
-                return
-            scale = radius / (orthog[0] * orthog[0] + orthog[1] * orthog[1]) ** 0.5
-            orthog[0] = round(orthog[0] * scale)
-            orthog[1] = round(orthog[1] * scale)
-            points = [
-                (p1[0] - orthog[0], p1[1] - orthog[1]),
-                (p1[0] + orthog[0], p1[1] + orthog[1]),
-                (p2[0] + orthog[0], p2[1] + orthog[1]),
-                (p2[0] - orthog[0], p2[1] - orthog[1]),
-            ]
-            pygame.draw.polygon(self.surface, fill_color.as_int(), points)
-            pygame.draw.circle(
-                self.surface,
-                fill_color.as_int(),
-                (round(p1[0]), round(p1[1])),
-                round(radius),
-            )
-            pygame.draw.circle(
-                self.surface,
-                fill_color.as_int(),
-                (round(p2[0]), round(p2[1])),
-                round(radius),
-            )
+    pygame.draw.circle(surface, color, p, int(circle.radius), r)
 
-    def draw_polygon(
-        self,
-        verts: Sequence[Tuple[float, float]],
-        radius: float,
-        outline_color: SpaceDebugColor,
-        fill_color: SpaceDebugColor,
-    ) -> None:
-        ps = [to_pygame(v, self.surface) for v in verts]
-        ps += [ps[0]]
+    circle_edge = circle_center + Vec2d(circle.radius, 0).rotated(circle.body.angle)
+    p2 = to_pygame(circle_edge, surface)
+    line_r = 3 if circle.radius > 20 else 1
+    pygame.draw.lines(surface, pygame.color.THECOLORS["blue"], False, [p,p2], line_r)
 
-        pygame.draw.polygon(self.surface, fill_color.as_int(), ps)
+def _draw_poly(surface, poly):
 
-        if radius > 0:
-            for i in range(len(verts)):
-                a = verts[i]
-                b = verts[(i + 1) % len(verts)]
-                self.draw_fat_segment(a, b, radius, outline_color, outline_color)
+    ps = poly.get_vertices()
+    ps = [to_pygame(p, surface) for p in ps]
+    ps += [ps[0]]
+    if hasattr(poly, "color"):
+        color = poly.color
+    elif poly.body.is_static:
+        color = pygame.color.THECOLORS["lightgrey"]
+    else:
+        color = pygame.color.THECOLORS["green"]
+    print(poly.radius)
+    pygame.draw.lines(surface, color, False, ps, max(int(poly.radius*2),1))
 
-    def draw_dot(
-        self, size: float, pos: Tuple[float, float], color: SpaceDebugColor
-    ) -> None:
-        p = to_pygame(pos, self.surface)
-        pygame.draw.circle(self.surface, color.as_int(), p, round(size), 0)
+def _draw_segment(surface, segment):
 
+    body = segment.body
+    pv1 = body.position + segment.a.rotated(body.angle)
+    pv2 = body.position + segment.b.rotated(body.angle)
 
-def get_mouse_pos(surface: pygame.Surface) -> Tuple[int, int]:
+    p1 = to_pygame(pv1, surface)
+    p2 = to_pygame(pv2, surface)
+
+    if hasattr(segment, "color"):
+        color = segment.color
+    elif segment.body.is_static:
+        color = pygame.color.THECOLORS["lightgrey"]
+    else:
+        color = pygame.color.THECOLORS["blue"]
+    pygame.draw.lines(surface, color, False, [p1,p2], max(int(segment.radius*2),1))
+
+def _draw_constraint(surface, constraint):
+
+    if isinstance(constraint, pymunk.GrooveJoint) and hasattr(constraint, "groove_a"):
+        pv1 = constraint.a.position + constraint.groove_a
+        pv2 = constraint.a.position + constraint.groove_b
+        p1 = to_pygame(pv1, surface)
+        p2 = to_pygame(pv2, surface)
+        pygame.draw.aalines(surface, pygame.color.THECOLORS["darkgray"], False, [p1,p2])
+    elif isinstance(constraint, pymunk.PinJoint):
+        pv1 = constraint.a.position + constraint.anchr1.rotated(constraint.a.angle)
+        pv2 = constraint.b.position + constraint.anchr2.rotated(constraint.b.angle)
+        p1 = to_pygame(pv1, surface)
+        p2 = to_pygame(pv2, surface)
+        pygame.draw.aalines(surface, pygame.color.THECOLORS["darkgray"], False, [p1,p2])
+    elif isinstance(constraint, pymunk.GearJoint):
+        pv1 = constraint.a.position
+        pv2 = constraint.a.position
+        p1 = to_pygame(pv1, surface)
+        p2 = to_pygame(pv2, surface)
+        pygame.draw.circle(surface, pygame.color.THECOLORS["darkgray"], p1, 3)
+        pygame.draw.circle(surface, pygame.color.THECOLORS["darkgray"], p2, 3)
+    elif hasattr(constraint, "anchr1"):
+        pv1 = constraint.a.position + constraint.anchr1.rotated(constraint.a.angle)
+        pv2 = constraint.b.position + constraint.anchr2.rotated(constraint.b.angle)
+        p1 = to_pygame(pv1, surface)
+        p2 = to_pygame(pv2, surface)
+        pygame.draw.aalines(surface, pygame.color.THECOLORS["darkgray"], False, [p1,p2])
+    else:
+        pv1 = constraint.a.position
+        pv2 = constraint.b.position
+        p1 = to_pygame(pv1, surface)
+        p2 = to_pygame(pv2, surface)
+        pygame.draw.aalines(surface, pygame.color.THECOLORS["darkgray"], False, [p1,p2])
+
+def get_mouse_pos(surface):
     """Get position of the mouse pointer in pymunk coordinates."""
     p = pygame.mouse.get_pos()
     return from_pygame(p, surface)
 
-
-def to_pygame(p: Tuple[float, float], surface: pygame.Surface) -> Tuple[int, int]:
+def to_pygame(p, surface):
     """Convenience method to convert pymunk coordinates to pygame surface
-    local coordinates.
-
-    Note that in case positive_y_is_up is False, this function wont actually do
-    anything except converting the point to integers.
+    local coordinates
     """
-    if positive_y_is_up:
-        return round(p[0]), surface.get_height() - round(p[1])
+    if flip_y:
+        return int(p[0]), surface.get_height()-int(p[1])
     else:
-        return round(p[0]), round(p[1])
+        return int(p[0]), int(p[1])
 
-
-def from_pygame(p: Tuple[float, float], surface: pygame.Surface) -> Tuple[int, int]:
+def from_pygame(p, surface):
     """Convenience method to convert pygame surface local coordinates to
     pymunk coordinates
     """
-    return to_pygame(p, surface)
+    return to_pygame(p,surface)
+
+
